@@ -1,11 +1,10 @@
 #include <stdio.h>
-#include <stdlib.h>
+#include <stdlib.h>  // malloc, free
 #include <string.h>
 #include <dirent.h>
-#include <sys/stat.h>
+#include <sys/stat.h> // для ino_t, off_t
 #include <time.h>
 #include <unistd.h>
-#include <limits.h>
 
 #define FIXED_DIR "/Users/nastya/Documents/test_folder"
 
@@ -28,7 +27,6 @@ typedef struct snapshot{
 file_info* create_file_info(const char* filename);
 file_info* scan_directory(void);
 void free_file_list(file_info* head);
-
 snapshot* add_snapshot(snapshot* head, int* snapshot_counter);
 void list_snapshots(snapshot* head);
 snapshot* find_snapshot(snapshot* head, int id);
@@ -108,11 +106,20 @@ snapshot* add_snapshot(snapshot* head, int* snapshot_counter) {
     new_snap->snapshot_id = ++(*snapshot_counter);
     new_snap->timestamp = time(NULL);
     new_snap->file_list = files;
-    new_snap->next = head;
+    new_snap->next = NULL;
 
-    printf("Snapshot taken.\n");
-    return new_snap;
+    if (!head) {
+        return new_snap;
+    }
+
+    snapshot* current = head;
+    while (current->next) {
+        current = current->next;
+    }
+    current->next = new_snap;
+    return head;
 }
+
 
 
 void list_snapshots(snapshot* head) {
@@ -188,31 +195,26 @@ void free_snapshots(snapshot* head) {
         free(temp);
     }
 }
+
 void save_snapshots_to_file(snapshot* head, const char* filename) {
     FILE* file = fopen(filename, "w");
-    if (!file) {
-        perror("fopen (save)");
-        return;
-    }
+    if (!file) return;
 
     while (head) {
-        fprintf(file, "SNAPSHOT %d %ld\n", head->snapshot_id, head->timestamp);
+        char* time_str = ctime(&head->timestamp);
+        time_str[strcspn(time_str, "\n")] = '\0';
+        fprintf(file, "SNAPSHOT %d %ld %s\n", head->snapshot_id, head->timestamp, time_str);
         file_info* file_node = head->file_list;
         while (file_node) {
-            fprintf(file, "%s %lu %ld %ld\n",
-                    file_node->name,
-                    (unsigned long)file_node->inode,
-                    (long)file_node->creation_time,
-                    (long)file_node->size);
+            fprintf(file, "FILE %s %lu %ld %ld\n", file_node->name, (unsigned long)file_node->inode,
+                    (long)file_node->creation_time, (long)file_node->size);
             file_node = file_node->next;
         }
-        fprintf(file, "END\n");
         head = head->next;
     }
-
     fclose(file);
-    printf("Snapshots saved to %s\n", filename);
 }
+
 
 snapshot* load_snapshots_from_file(const char* filename, int* snapshot_counter) {
     FILE* file = fopen(filename, "r");
@@ -222,6 +224,7 @@ snapshot* load_snapshots_from_file(const char* filename, int* snapshot_counter) 
     }
 
     snapshot* head = NULL;
+    snapshot* tail = NULL;
     snapshot* current_snap = NULL;
     char line[512];
 
@@ -229,23 +232,29 @@ snapshot* load_snapshots_from_file(const char* filename, int* snapshot_counter) 
         if (strncmp(line, "SNAPSHOT", 8) == 0) {
             snapshot* new_snap = malloc(sizeof(snapshot));
             new_snap->file_list = NULL;
-            new_snap->next = head;
+            new_snap->next = NULL;
             sscanf(line, "SNAPSHOT %d %ld", &new_snap->snapshot_id, &new_snap->timestamp);
             if (new_snap->snapshot_id > *snapshot_counter)
                 *snapshot_counter = new_snap->snapshot_id;
-            head = new_snap;
+
+            if (!head) {
+                head = tail = new_snap;
+            } else {
+                tail->next = new_snap;
+                tail = new_snap;
+            }
+
             current_snap = new_snap;
-        } else if (strncmp(line, "END", 3) == 0) {
-            current_snap = NULL;
         } else if (current_snap) {
             file_info* file = malloc(sizeof(file_info));
-            file->next = current_snap->file_list;
             file->name = malloc(256);
             sscanf(line, "%255s %lu %ld %ld",
                    file->name,
                    (unsigned long*)&file->inode,
                    &file->creation_time,
                    &file->size);
+
+            file->next = current_snap->file_list;
             current_snap->file_list = file;
         }
     }
@@ -254,6 +263,7 @@ snapshot* load_snapshots_from_file(const char* filename, int* snapshot_counter) 
     printf("Snapshots loaded from %s\n", filename);
     return head;
 }
+
 
 int main(void) {
     snapshot* snapshots = NULL;
