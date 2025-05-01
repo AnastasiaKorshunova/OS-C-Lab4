@@ -5,13 +5,11 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+#include <limits.h>
 
 #define FIXED_DIR "/Users/nastya/Documents/test_folder"
 
-typedef struct file_info file_info;
-typedef struct snapshot snapshot;
-
-typedef struct file_info {
+typedef struct file_info{
     ino_t inode;
     time_t creation_time;
     off_t size;
@@ -19,7 +17,7 @@ typedef struct file_info {
     char* name;
 } file_info;
 
-typedef struct snapshot {
+typedef struct snapshot{
     int snapshot_id;
     time_t timestamp;
     file_info* file_list;
@@ -37,6 +35,8 @@ snapshot* find_snapshot(snapshot* head, int id);
 void print_snapshot_details(snapshot* snap);
 snapshot* delete_snapshot(snapshot* head, int id);
 void free_snapshots(snapshot* head);
+void save_snapshots_to_file(snapshot* head, const char* filename);
+snapshot* load_snapshots_from_file(const char* filename, int* snapshot_counter);
 
 
 file_info* create_file_info(const char* filename) {
@@ -188,13 +188,79 @@ void free_snapshots(snapshot* head) {
         free(temp);
     }
 }
+void save_snapshots_to_file(snapshot* head, const char* filename) {
+    FILE* file = fopen(filename, "w");
+    if (!file) {
+        perror("fopen (save)");
+        return;
+    }
 
-// ---------- MAIN PROGRAM ----------
-int main() {
+    while (head) {
+        fprintf(file, "SNAPSHOT %d %ld\n", head->snapshot_id, head->timestamp);
+        file_info* file_node = head->file_list;
+        while (file_node) {
+            fprintf(file, "%s %lu %ld %ld\n",
+                    file_node->name,
+                    (unsigned long)file_node->inode,
+                    (long)file_node->creation_time,
+                    (long)file_node->size);
+            file_node = file_node->next;
+        }
+        fprintf(file, "END\n");
+        head = head->next;
+    }
+
+    fclose(file);
+    printf("Snapshots saved to %s\n", filename);
+}
+
+snapshot* load_snapshots_from_file(const char* filename, int* snapshot_counter) {
+    FILE* file = fopen(filename, "r");
+    if (!file) {
+        perror("fopen (load)");
+        return NULL;
+    }
+
+    snapshot* head = NULL;
+    snapshot* current_snap = NULL;
+    char line[512];
+
+    while (fgets(line, sizeof(line), file)) {
+        if (strncmp(line, "SNAPSHOT", 8) == 0) {
+            snapshot* new_snap = malloc(sizeof(snapshot));
+            new_snap->file_list = NULL;
+            new_snap->next = head;
+            sscanf(line, "SNAPSHOT %d %ld", &new_snap->snapshot_id, &new_snap->timestamp);
+            if (new_snap->snapshot_id > *snapshot_counter)
+                *snapshot_counter = new_snap->snapshot_id;
+            head = new_snap;
+            current_snap = new_snap;
+        } else if (strncmp(line, "END", 3) == 0) {
+            current_snap = NULL;
+        } else if (current_snap) {
+            file_info* file = malloc(sizeof(file_info));
+            file->next = current_snap->file_list;
+            file->name = malloc(256);
+            sscanf(line, "%255s %lu %ld %ld",
+                   file->name,
+                   (unsigned long*)&file->inode,
+                   &file->creation_time,
+                   &file->size);
+            current_snap->file_list = file;
+        }
+    }
+
+    fclose(file);
+    printf("Snapshots loaded from %s\n", filename);
+    return head;
+}
+
+int main(void) {
     snapshot* snapshots = NULL;
     int snapshot_counter = 0;
     char command;
 
+    snapshots = load_snapshots_from_file("snapshots.txt", &snapshot_counter);
     do {
         printf("\nChoose an operation:\n");
         printf("1 - Take snapshot of directory\n");
@@ -209,7 +275,6 @@ int main() {
         switch (command) {
             case '1':
                 snapshots = add_snapshot(snapshots, &snapshot_counter);
-                printf("Snapshot taken.\n");
                 break;
             case '2':
                 list_snapshots(snapshots);
@@ -240,6 +305,7 @@ int main() {
 
     } while (command != 'q');
 
+    save_snapshots_to_file(snapshots, "snapshots.txt");
     free_snapshots(snapshots);
     return 0;
 }
